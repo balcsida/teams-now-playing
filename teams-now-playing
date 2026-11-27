@@ -1,0 +1,25 @@
+#!/bin/zsh
+# Mirrors the playing Apple Music track into the Teams status message.
+# Run by launchd every 30s; see install.sh.
+PATH=/opt/homebrew/bin:/usr/local/bin:$PATH   # launchd's PATH has no Homebrew
+state=${TMPDIR:-/tmp}/teams-now-playing.last
+
+# "is running" guard: a bare tell would launch Music.
+track=$(osascript \
+  -e 'if application "Music" is running then' \
+  -e 'tell application "Music" to if player state is playing then return "🎵 " & (name of current track) & " — " & (artist of current track)' \
+  -e 'end if' 2>/dev/null)
+track=${track% — }   # radio streams have no artist
+
+[[ $track == "$(cat $state 2>/dev/null)" ]] && exit 0
+
+# Never clobber a status typed by hand: only write over an empty one or our own.
+current=$(teams presence get -o json | jq -r '.data.statusMessage.message.content // ""') || exit 1
+if [[ -z $current || $current == 🎵* ]]; then
+  # shortcut: the 1h expiry (cleanup if the Mac sleeps mid-song) also drops a track
+  # looping for over an hour; refresh on state-file age if that ever matters.
+  # <pinnednote> is Teams' marker for "Show when people message me"; Graph has no field for it.
+  teams presence status -q --message "$track${track:+<pinnednote></pinnednote>}" \
+    ${track:+--expiry=$(date -u -v+1H +%Y-%m-%dT%H:%M:%SZ)} >/dev/null || exit 1
+fi
+print -r -- "$track" > $state
